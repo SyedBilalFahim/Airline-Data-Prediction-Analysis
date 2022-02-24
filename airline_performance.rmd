@@ -1,0 +1,414 @@
+---
+title: "Airline On-Time"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading Libraries
+
+```{r libraries}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(mlr3)
+library(mlr3learners)
+library(glmnet)
+library(mlr3fselect)
+library(FSelectorRcpp)
+library("mlr3filters")
+library(praznik)
+library(dplyr)
+library(tidyselect)
+library(mlr3viz)
+
+```
+
+
+## Loading 2007 and 2008 Datasets for our analysis including plane dataset
+I will be using data.table library and fread function to read a big data faster.
+
+```{r data_load, echo=FALSE}
+
+data_2007<- fread("E:/newassignment/2007.csv")
+data_2008<- fread("E:/newassignment/2008.csv")
+plane.data <- read.csv("C:/Users/DELL/Downloads/plane-data.csv")
+
+```
+
+## Merging both years data into one
+
+```{r merge}
+airline<- rbind(data_2007,data_2008)
+sapply(airline, function(x)(100*(sum(is.na(x)))/nrow(airline)))
+
+```
+Using rbind we can combine datasets
+
+## Pre-processing 
+
+Now that we have loaded and merged the data, we will preprocess and prepare it for analysis and visualization.
+We will check for missing values and will be eliminating them.
+```{r preprocess}
+sapply(airline, function(x)(100*(sum(is.na(x)))/nrow(airline)))
+airline<-airline[,CancellationCode:=NULL]
+airline<- na.omit(airline)
+
+```
+
+We can see that last 4 columns has around 19 % missing values we canremove these
+
+
+## Removing irrelevant columns
+
+Here in this part, I will be removing some unnecessary columns which we wont need.
+These include, Cancellation code and TaxiIn and Taxiout columns
+
+```{r removing_col}
+# we can see that cancellation code columns doesnt have any value so we can discard it
+
+
+airline<-airline[,TaxiIn:=NULL]
+airline<-airline[,TaxiOut:=NULL]
+names(airline)
+
+
+```
+
+Now we have 26 remaining columns
+
+## Changing Months to Month names and days to days names
+
+
+```{r changing}
+
+
+# Converting months to its names
+
+mymonths <- c("Jan","Feb","Mar",
+              "Apr","May","Jun",
+              "Jul","Aug","Sep",
+              "Oct","Nov","Dec")
+
+
+airline$Month<- mymonths[ airline$Month ]
+
+# Converting Days to its names
+
+mydays <- c("Sun","Mon","Tue","Wed",
+            "Thurs","Fri","Sat")
+airline$DayOfWeek<- mydays[ airline$DayOfWeek ]
+head(airline)
+
+```
+ We can see that now the months are changed to its names and days are also in the form of monday,tue etc.
+ 
+## Changing Time to Time format
+
+```{r time}
+airline$DepTime <- sprintf("%04d", airline$DepTime)
+airline$CRSDepTime <- sprintf("%04d", airline$CRSDepTime)
+airline$ArrTime<- sprintf("%04d", airline$ArrTime)
+airline$CRSArrTime<- sprintf("%04d", airline$CRSArrTime)
+airline$DepTime<-format(strptime(airline$DepTime, format="%H%M"), format = "%H:%M")
+airline$CRSDepTime<-format(strptime(airline$CRSDepTime, format="%H%M"), format = "%H:%M")
+airline$ArrTime<-format(strptime(airline$ArrTime, format="%H%M"), format = "%H:%M")
+airline$CRSArrTime<-format(strptime(airline$CRSArrTime, format="%H%M"), format = "%H:%M")
+
+head(airline[1:29])
+
+```
+
+Now , we have changed the time to its original format using sprintf command which actually convert the minutes to 4 digits like if the minutes are 456 than it may be written as 0456. Than by using format command we formatted it in hr:
+min structure.
+
+Now that we have prepared the data we can answer the questions.
+
+## Question # 1:
+1. When is the best time of day, day of the week, and time of year to fly to minimise delays?
+
+```{r question1}
+# Best Day of Week:
+# From airlines dataset, take only occurrences showing a delay
+airline= fread("E:/assignment/airline.csv")
+
+delay<- airline %>%
+  group_by(DayOfWeek) %>% summarise(Delay= mean(ArrDelay))
+
+ggplot(delay, aes(x =DayOfWeek, y =Delay, fill=DayOfWeek)) +
+  geom_bar(stat="identity", width = 0.6)+ xlab("Days of week")+ ylab("Delay")
+
+# Best Month:
+delay_mon= airline %>% group_by(Month) %>% summarise(Delay=mean(ArrDelay))
+ggplot(delay_mon, aes(x = Month, y = Delay,fill=Month)) +
+  geom_bar(stat="identity", width = 0.6)+ xlab("Months")+ ylab("Delay")
+
+# Best Day of the month
+day<- airline %>% group_by(DayofMonth) %>% summarise(Delay=mean(ArrDelay))
+ggplot(day, aes(x = DayofMonth, y = Delay)) +
+  geom_bar(stat="identity", width = 0.6)+ xlab("Days of Month")+ ylab("Delay in minutes")
+
+
+# Best Time of the day:
+
+time= airline %>% group_by(DepTime) %>% summarise(Delay= mean(ArrDelay))
+
+ggplot(time, aes(x = DepTime, y = Delay)) +
+  geom_bar(stat="identity", width = 0.6)+ xlab("Time Of Day")+ ylab("Delay")
+
+
+
+
+
+```
+
+We can see from the graphs above that the best day where the count of delays are less is Friday, The best month where 
+Delay Count is less is September. The best day of the month where delay count is less is 24th and the best
+time of the day are the early hours possibly between 5 am till 9 am where delay count is in negative. 
+
+## Question # 2:
+2. Do older planes suffer more delays?
+For Question 2 we will be needing plane data and we will be fetching manufacturing year from it.
+```{r question2}
+# We need to change the name of tailnum in plane-data dataset to TailNum
+names(plane.data)[1] <- 'TailNum'
+
+# We only need Manufacturing year so other columns are irrelevant
+plane.data<-plane.data[-c(2,3,4,5,6,7,8)]
+
+# We can see that top 35 values are missing so we are discarding them
+plane.data<-plane.data[35:5029,]
+
+# Merging data using TailNum
+datt<- merge(x = airline, y = plane.data, by = "TailNum", all.x = TRUE)
+
+
+
+# Filtering data where tail num is 0
+dattr<- filter(datt,datt$TailNum!=0)
+
+
+# Filtering out 1st Row
+dattr=dattr[-1]
+
+# Subsetting Data  where year is not null.
+data_merge<- subset(dattr,is.na(dattr$year)==F)
+data_merge$year=factor(data_merge$year)
+
+# We will summarise Arrdelay for each manufacturing year 
+
+
+years<- data_merge %>% group_by(year) %>% summarise(Delay= mean(ArrDelay)) 
+years
+
+
+
+years$year=factor(years$year)
+
+# Changing the levels to get a clearer view 
+levels(years$year) <- c("M", "0","56","57","58","59","60",
+                                   "61","62","63","64","65","66","67","68","69","70","71","72","73","74",
+                                   "75","76","77","78","79","80","81","82","83","84","85","86","87","88",
+                                   "89","90","91","92","93","94","95","96","97","98","99","00","01","02",
+                                   "03","04","05","06","07","08","N")
+ggplot(years, aes(x = year, y = Delay)) +
+  geom_bar(stat="identity", width = 0.6)+ xlab("Year")+ ylab("Delay")
+
+
+
+# we will do the same with departure delay
+
+
+years_dep<- data_merge %>% group_by(year) %>% summarise(Delay= mean(DepDelay)) 
+
+years_dep$year=factor(years_dep$year)
+
+# Changing the levels to get a clearer view 
+levels(years_dep$year) <- c("M", "0","56","57","58","59","60",
+                                   "61","62","63","64","65","66","67","68","69","70","71","72","73","74",
+                                   "75","76","77","78","79","80","81","82","83","84","85","86","87","88",
+                                   "89","90","91","92","93","94","95","96","97","98","99","00","01","02",
+                                   "03","04","05","06","07","08","N")
+ggplot(years_dep, aes(x = year, y = Delay)) +
+  geom_bar(stat="identity", width = 0.6)+ xlab("Year")+ ylab("Delay")
+
+
+
+
+```
+
+
+From plot 1 we can observe that the arrival delay is gradually decreasing after year 1980 which shows that older plains do have greater delays as compared to newer except for the plains which were manufactured in 2004 because their arrival delay rate is much higher.
+
+From plot 2 we can see that the departure delay doesn't really depends on the year.
+
+
+## Question # 3:
+3. How does the number of people flying between different locations change over time?
+
+Here, I considered the avg distance over the months, the number of people flying and the number of flights.
+
+
+```{r question3}
+
+
+# Computing average distance over the months
+avg<-airline %>%
+	group_by(Month,Year) %>%
+	summarise(mean_Distance = mean(Distance))
+avg
+avg=as.data.frame(avg)
+avg$mean_Distance=sort(avg$mean_Distance,decreasing = F)
+avg$Month=sort(avg$Month,decreasing = F)
+
+avg
+ggplot(avg,aes(Month,mean_Distance,col=Year))+geom_point(alpha=3)+labs(title = "Average Distance Over the Months in 2007 and 2008")
+
+# Sum of distance
+avg_sum<-airline %>%
+	group_by(Month,Year) %>%
+	summarise(Distance = sum(Distance))
+
+avg_sum$mean_Distance=sort(avg_sum$Distance,decreasing = F)
+
+avg_sum
+ggplot(avg_sum,aes(Month,Distance,col=Year))+geom_point()+labs(title = "Sum of Distance Over the months in 2007 and 2008")
+
+# Count of flights
+avg_count<-airline %>%
+  group_by(Month,Year) %>%
+ count(factor(UniqueCarrier))
+max_count<- avg_count %>%
+  group_by(Month,Year)%>%
+  summarise(Max= sum(n))
+
+max_count
+ggplot(max_count,aes(Month,Max,col=Year))+geom_point()+ labs(title = "Number of Flights")
+```
+In first graph I sumarised the average distance travelled in each month and year using group by and summarise functions. Here, the average distance is increasing over the years.
+
+In the second graph, I summarised the sum of distance travelled by using the same functions as before. It shows a decrease over the years which suggests that people travelled less in 2008 as compared to 2007
+
+In the third graph, I summarised the count of carriers and than computed their sum. It shows that the number of flights also decreased over the years.
+
+
+## Question # 4:
+4. Can you detect cascading failures as delays in one airport create delays in others?
+
+For this we can analyse the departure delay which is causing arival delay on another airport.
+
+```{r question4}
+subset<- filter(airline,DepDelay>0)
+arrdela<- table(subset$ArrDelay)
+arrdela<- data.frame(arrdela)
+
+subset2<- filter(subset,ArrDelay<0)
+subset3<- filter(subset,ArrDelay>0)
+
+print(paste0("The percentage of Departure Delays Causing Arrival Delays :",+nrow(subset3)/nrow(subset)*100,"%"))
+print(paste0("The percentage of Departure Delays Not Causing Arrival Delays :",+nrow(subset2)/nrow(subset)*100,"%"))
+
+
+
+```
+This big Percentage is proving that delay on one airport which is the departure delay is causing delay on the other
+airport which is the arrival delay. Thus we conclude that cascading failures exist.
+
+
+
+## Question5:
+5. Use the available variables to construct a model that predicts delays.
+
+We will be doing linear regression on the ArrDelay Column to predict the arrival delay.
+We will use correlation approach to pick the most significant variables for the model. Later we will use r squre value as the metric to see the performance.
+
+
+```{r question5}
+
+# Data is very big so we will take only 5% of it for our model
+# Creating a regression task with ArrDelay as the target variable
+str(airline)
+## 5% of the sample size
+smp_size <- floor(0.05 * nrow(airline))
+
+## set the seed to make your partition reproducible
+set.seed(19677)
+train_ind <- sample(seq_len(nrow(airline)), size = smp_size)
+
+airline_sampled <- airline[train_ind, ]
+
+# Eliminating chr variables
+airline_sampled<- airline_sampled[,-c(2,4,5,6,7,8,9,11,17,18)]
+
+# Creating a task 
+task<-TaskRegr$new("task1", as_data_backend(airline_sampled), "ArrDelay")
+
+task$feature_names
+
+# Train test split
+train = sample(task$nrow, 0.7 * task$nrow)
+test_set = setdiff(seq_len(task$nrow), train)
+
+
+
+# using correlation as a filter to choose the best attributes for our model
+filter = flt("correlation")
+
+a<-filter$calculate(task)
+print(a$calculate(task = task))
+fil<-as.data.table(filter)
+fil
+
+task_ranger = task$clone()
+# subsetting the task to only those attributes which are correlated
+new_tsk= task_ranger$select(setdiff(task_ranger$feature_names,c("ActualElapsedTime","FlightNum","AirTime","SecurityDelay","CRSElapsedTime","DayofMonth","Distance","Diverted","Cancelled")))
+
+# setting the learner
+learner_ranger = lrn("regr.lm")
+
+# Training and testing our model
+p=learner_ranger$train(new_tsk, row_ids = train)
+
+prediction = learner_ranger$predict(new_tsk, row_ids = test_set)
+
+print(paste0("The r square value is : ",prediction$score(msr("regr.rsq"))))
+print(paste0("The mean square error value is : ",prediction$score(msr("regr.mse"))))
+print(paste0("The root mean square error value is : ",prediction$score(msr("regr.rmse"))))
+
+plot(prediction$response,test_set,title=" Predicted Vs Test", xlab = "Predicted",ylab = "Test Delay")
+
+# Using CV for resampling and sequnetial forward selection 
+cv3 = rsmp("cv", folds = 3)
+
+
+terminator = trm("stagnation", iters = 5)
+
+instance = FSelectInstanceSingleCrit$new(
+  task = new_tsk,
+  learner = learner_ranger,
+  resampling = cv3,
+  measure =c(msr("regr.rsq")),
+  terminator = terminator)
+
+fselector = fs("sequential")
+a<-fselector$optimize(instance)
+a$features
+
+
+as.data.table(instance$archive)
+
+
+
+print(paste0("The r square value is : ",a$regr.rsq))
+
+# Graphical Representation
+autoplot(prediction)
+autoplot(prediction)
+autoplot(prediction, type = "histogram", binwidth = 10)
+```
+We can see that with and without re sampling, our linear regression model outperformed with r square value of 0.96. 
+Here, we first computed correlation and picked the best variables using correlation and trained our model. Than we used sequential forward selection with re sampling using cross validation, both of the models gives the same result. 
+
+
